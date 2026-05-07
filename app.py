@@ -3,18 +3,29 @@ import easyocr
 import cv2
 import numpy as np
 from PIL import Image
-import re
+from datetime import datetime
+import pandas as pd
 
-# =========================
-# НАСТРОЙКИ
-# =========================
+# ====================================
+# STREAMLIT CONFIG
+# ====================================
 
 st.set_page_config(
     page_title="Food Ingredient Scanner",
     layout="centered"
 )
 
-# Вредни / нежелани съставки
+# ====================================
+# HISTORY INIT
+# ====================================
+
+if "scan_history" not in st.session_state:
+    st.session_state.scan_history = []
+
+# ====================================
+# HARMFUL INGREDIENTS
+# ====================================
+
 HARMFUL_INGREDIENTS = {
     "bg": {
         "e621": "Мононатриев глутамат (E621)",
@@ -36,9 +47,9 @@ HARMFUL_INGREDIENTS = {
     }
 }
 
-# =========================
-# ЕЗИК
-# =========================
+# ====================================
+# LANGUAGE
+# ====================================
 
 language = st.sidebar.selectbox(
     "Избери език / Select language",
@@ -56,11 +67,14 @@ TEXTS = {
     "found": "Намерени съставки" if is_bg else "Detected ingredients",
     "not_found": "Няма открити вредни съставки." if is_bg else "No harmful ingredients detected.",
     "warning": "⚠️ Внимание!" if is_bg else "⚠️ Warning!",
+    "confidence": "OCR Accuracy Score" if is_bg else "OCR Confidence Score",
+    "history": "История на сканиранията" if is_bg else "Scan History",
+    "download": "Свали историята" if is_bg else "Download history",
 }
 
-# =========================
-# OCR
-# =========================
+# ====================================
+# OCR READER
+# ====================================
 
 @st.cache_resource
 def load_reader():
@@ -68,9 +82,9 @@ def load_reader():
 
 reader = load_reader()
 
-# =========================
-# ФУНКЦИИ
-# =========================
+# ====================================
+# FUNCTIONS
+# ====================================
 
 def preprocess_image(image):
     img = np.array(image)
@@ -80,8 +94,8 @@ def preprocess_image(image):
     else:
         gray = img
 
-    # Подобряване на OCR
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
+
     thresh = cv2.adaptiveThreshold(
         gray,
         255,
@@ -94,27 +108,42 @@ def preprocess_image(image):
     return thresh
 
 
-def extract_text(image):
+def extract_text_and_confidence(image):
+
     processed = preprocess_image(image)
 
-    results = reader.readtext(processed, detail=0)
+    results = reader.readtext(processed)
 
-    text = " ".join(results)
+    extracted_text = []
+    confidence_scores = []
 
-    return text
+    for result in results:
+        text = result[1]
+        confidence = result[2]
+
+        extracted_text.append(text)
+        confidence_scores.append(confidence)
+
+    final_text = " ".join(extracted_text)
+
+    avg_confidence = (
+        sum(confidence_scores) / len(confidence_scores)
+        if confidence_scores else 0
+    )
+
+    return final_text, avg_confidence
 
 
 def find_harmful_ingredients(text):
+
     text_lower = text.lower()
 
     found = []
 
-    # BG
     for key, value in HARMFUL_INGREDIENTS["bg"].items():
         if key in text_lower:
             found.append(value)
 
-    # EN
     for key, value in HARMFUL_INGREDIENTS["en"].items():
         if key in text_lower:
             found.append(value)
@@ -122,9 +151,18 @@ def find_harmful_ingredients(text):
     return list(set(found))
 
 
-# =========================
+def save_scan_to_history(text, ingredients, confidence):
+
+    st.session_state.scan_history.append({
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "confidence": round(confidence * 100, 2),
+        "ingredients": ", ".join(ingredients) if ingredients else "None",
+        "text": text[:150]
+    })
+
+# ====================================
 # UI
-# =========================
+# ====================================
 
 st.title(TEXTS["title"])
 
@@ -143,18 +181,58 @@ if uploaded_file is not None:
 elif camera_image is not None:
     image = Image.open(camera_image)
 
+# ====================================
+# PROCESS IMAGE
+# ====================================
+
 if image is not None:
 
-    st.image(image, caption="Image", use_column_width=True)
+    st.image(image, caption="Uploaded Image", use_column_width=True)
 
     with st.spinner(TEXTS["processing"]):
 
-        extracted_text = extract_text(image)
+        extracted_text, confidence = extract_text_and_confidence(image)
 
         harmful_found = find_harmful_ingredients(extracted_text)
 
+        save_scan_to_history(
+            extracted_text,
+            harmful_found,
+            confidence
+        )
+
+    # ====================================
+    # OCR CONFIDENCE SCORE
+    # ====================================
+
+    st.subheader(TEXTS["confidence"])
+
+    score_percent = round(confidence * 100, 2)
+
+    st.progress(min(int(score_percent), 100))
+
+    if score_percent >= 85:
+        st.success(f"{score_percent}%")
+    elif score_percent >= 60:
+        st.warning(f"{score_percent}%")
+    else:
+        st.error(f"{score_percent}%")
+
+    # ====================================
+    # RECOGNIZED TEXT
+    # ====================================
+
     st.subheader(TEXTS["recognized"])
-    st.text_area("", extracted_text, height=200)
+
+    st.text_area(
+        "",
+        extracted_text,
+        height=200
+    )
+
+    # ====================================
+    # HARMFUL INGREDIENTS
+    # ====================================
 
     st.subheader(TEXTS["found"])
 
@@ -163,3 +241,50 @@ if image is not None:
             st.warning(f"{TEXTS['warning']} {ingredient}")
     else:
         st.success(TEXTS["not_found"])
+
+# ====================================
+# HISTORY SECTION
+# ====================================
+
+st.divider()
+
+st.subheader(TEXTS["history"])
+
+if st.session_state.scan_history:
+
+    history_df = pd.DataFrame(
+        st.session_state.scan_history[::-1]
+    )
+
+    st.dataframe(
+        history_df,
+        use_container_width=True
+    )
+
+    csv = history_df.to_csv(index=False).encode("utf-8")
+
+    st.download_button(
+        label=TEXTS["download"],
+        data=csv,
+        file_name="scan_history.csv",
+        mime="text/csv"
+    )
+
+else:
+    st.info("No scans yet.")
+
+# ====================================
+# SIDEBAR INFO
+# ====================================
+
+st.sidebar.markdown("## Features")
+
+st.sidebar.markdown("""
+- OCR via EasyOCR
+- Bulgarian + English support
+- Harmful ingredient detection
+- Camera support
+- OCR confidence score
+- Scan history
+- CSV export
+""")
