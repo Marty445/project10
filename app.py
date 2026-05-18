@@ -7,43 +7,90 @@ from datetime import datetime
 import pandas as pd
 
 # ====================================
-# STREAMLIT CONFIG
+# PAGE CONFIG
 # ====================================
 
 st.set_page_config(
-    page_title="Food Ingredient Scanner",
+    page_title="Smart Food Label Scanner",
     layout="centered"
 )
 
 # ====================================
-# HISTORY INIT
+# SESSION STATE
 # ====================================
 
 if "scan_history" not in st.session_state:
     st.session_state.scan_history = []
 
 # ====================================
-# HARMFUL INGREDIENTS
+# INGREDIENT DATABASE
 # ====================================
 
-HARMFUL_INGREDIENTS = {
-    "bg": {
-        "e621": "Мононатриев глутамат (E621)",
-        "палмово масло": "Палмово масло",
-        "аспартам": "Аспартам",
-        "e250": "Натриев нитрит (E250)",
-        "e951": "Аспартам (E951)",
-        "захар": "Добавена захар",
-        "глюкозо-фруктозен сироп": "Глюкозо-фруктозен сироп",
+INGREDIENTS_DB = {
+
+    # HARMFUL INGREDIENTS
+    "e621": {
+        "name_bg": "Мононатриев глутамат",
+        "name_en": "Monosodium Glutamate",
+        "type": "harmful",
+        "description": "Подобрител на вкуса.",
+        "health": "Може да причини главоболие, високо кръвно налягане и зависимост към преработени храни.",
+        "alternative": "Домашно приготвена храна с естествени подправки."
     },
-    "en": {
-        "e621": "Monosodium Glutamate (E621)",
-        "palm oil": "Palm Oil",
-        "aspartame": "Aspartame",
-        "e250": "Sodium Nitrite (E250)",
-        "e951": "Aspartame (E951)",
-        "sugar": "Added Sugar",
-        "glucose-fructose syrup": "Glucose-Fructose Syrup",
+
+    "palm oil": {
+        "name_bg": "Палмово масло",
+        "name_en": "Palm Oil",
+        "type": "harmful",
+        "description": "Евтина растителна мазнина.",
+        "health": "Може да увеличи риска от сърдечни заболявания.",
+        "alternative": "Продукти със слънчогледово или зехтин."
+    },
+
+    "аспартам": {
+        "name_bg": "Аспартам",
+        "name_en": "Aspartame",
+        "type": "harmful",
+        "description": "Изкуствен подсладител.",
+        "health": "Може да причини главоболие и проблеми с метаболизма.",
+        "alternative": "Мед или натурални подсладители."
+    },
+
+    "sugar": {
+        "name_bg": "Добавена захар",
+        "name_en": "Added Sugar",
+        "type": "harmful",
+        "description": "Подсладител.",
+        "health": "Прекомерната консумация води до диабет и затлъстяване.",
+        "alternative": "Плодове или натурални продукти без добавена захар."
+    },
+
+    # SAFE INGREDIENTS
+    "oats": {
+        "name_bg": "Овес",
+        "name_en": "Oats",
+        "type": "safe",
+        "description": "Богат на фибри.",
+        "health": "Подобрява храносмилането и сърдечното здраве.",
+        "alternative": "Добър избор."
+    },
+
+    "milk": {
+        "name_bg": "Мляко",
+        "name_en": "Milk",
+        "type": "safe",
+        "description": "Източник на калций.",
+        "health": "Подпомага костите и мускулите.",
+        "alternative": "Добър избор."
+    },
+
+    "honey": {
+        "name_bg": "Мед",
+        "name_en": "Honey",
+        "type": "safe",
+        "description": "Натурален подсладител.",
+        "health": "Съдържа антиоксиданти.",
+        "alternative": "Добър избор."
     }
 }
 
@@ -59,17 +106,18 @@ language = st.sidebar.selectbox(
 is_bg = language == "Български"
 
 TEXTS = {
-    "title": "Скенер за вредни съставки" if is_bg else "Harmful Ingredient Scanner",
+    "title": "Умен скенер за хранителни етикети" if is_bg else "Smart Food Label Scanner",
     "upload": "Качи снимка" if is_bg else "Upload image",
     "camera": "Или използвай камера" if is_bg else "Or use camera",
     "processing": "Обработка..." if is_bg else "Processing...",
     "recognized": "Разпознат текст" if is_bg else "Recognized text",
-    "found": "Намерени съставки" if is_bg else "Detected ingredients",
-    "not_found": "Няма открити вредни съставки." if is_bg else "No harmful ingredients detected.",
-    "warning": "⚠️ Внимание!" if is_bg else "⚠️ Warning!",
-    "confidence": "OCR Accuracy Score" if is_bg else "OCR Confidence Score",
-    "history": "История на сканиранията" if is_bg else "Scan History",
+    "results": "Резултати" if is_bg else "Results",
+    "history": "История" if is_bg else "History",
     "download": "Свали историята" if is_bg else "Download history",
+    "safe": "Невредна съставка" if is_bg else "Safe ingredient",
+    "harmful": "Вредна съставка" if is_bg else "Harmful ingredient",
+    "health": "Здравословни проблеми" if is_bg else "Health risks",
+    "alternative": "По-добра алтернатива" if is_bg else "Better alternative"
 }
 
 # ====================================
@@ -83,10 +131,11 @@ def load_reader():
 reader = load_reader()
 
 # ====================================
-# FUNCTIONS
+# IMAGE PROCESSING
 # ====================================
 
 def preprocess_image(image):
+
     img = np.array(image)
 
     if len(img.shape) == 3:
@@ -107,57 +156,50 @@ def preprocess_image(image):
 
     return thresh
 
+# ====================================
+# OCR FUNCTION
+# ====================================
 
-def extract_text_and_confidence(image):
+def extract_text(image):
 
     processed = preprocess_image(image)
 
     results = reader.readtext(processed)
 
-    extracted_text = []
-    confidence_scores = []
+    extracted = []
 
     for result in results:
-        text = result[1]
-        confidence = result[2]
+        extracted.append(result[1])
 
-        extracted_text.append(text)
-        confidence_scores.append(confidence)
+    return " ".join(extracted)
 
-    final_text = " ".join(extracted_text)
+# ====================================
+# INGREDIENT ANALYSIS
+# ====================================
 
-    avg_confidence = (
-        sum(confidence_scores) / len(confidence_scores)
-        if confidence_scores else 0
-    )
-
-    return final_text, avg_confidence
-
-
-def find_harmful_ingredients(text):
+def analyze_ingredients(text):
 
     text_lower = text.lower()
 
     found = []
 
-    for key, value in HARMFUL_INGREDIENTS["bg"].items():
+    for key, data in INGREDIENTS_DB.items():
+
         if key in text_lower:
-            found.append(value)
+            found.append(data)
 
-    for key, value in HARMFUL_INGREDIENTS["en"].items():
-        if key in text_lower:
-            found.append(value)
+    return found
 
-    return list(set(found))
+# ====================================
+# SAVE HISTORY
+# ====================================
 
-
-def save_scan_to_history(text, ingredients, confidence):
+def save_history(text, results):
 
     st.session_state.scan_history.append({
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "confidence": round(confidence * 100, 2),
-        "ingredients": ", ".join(ingredients) if ingredients else "None",
-        "text": text[:150]
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "text": text[:100],
+        "ingredients_found": len(results)
     })
 
 # ====================================
@@ -168,85 +210,83 @@ st.title(TEXTS["title"])
 
 uploaded_file = st.file_uploader(
     TEXTS["upload"],
-    type=["jpg", "jpeg", "png"]
+    type=["jpg", "png", "jpeg"]
 )
 
 camera_image = st.camera_input(TEXTS["camera"])
 
 image = None
 
-if uploaded_file is not None:
+if uploaded_file:
     image = Image.open(uploaded_file)
 
-elif camera_image is not None:
+elif camera_image:
     image = Image.open(camera_image)
 
 # ====================================
-# PROCESS IMAGE
+# PROCESS
 # ====================================
 
 if image is not None:
 
-    st.image(image, caption="Uploaded Image", use_column_width=True)
+    st.image(image, use_column_width=True)
 
     with st.spinner(TEXTS["processing"]):
 
-        extracted_text, confidence = extract_text_and_confidence(image)
+        extracted_text = extract_text(image)
 
-        harmful_found = find_harmful_ingredients(extracted_text)
+        results = analyze_ingredients(extracted_text)
 
-        save_scan_to_history(
-            extracted_text,
-            harmful_found,
-            confidence
-        )
+        save_history(extracted_text, results)
 
-    # ====================================
-    # OCR CONFIDENCE SCORE
-    # ====================================
-
-    st.subheader(TEXTS["confidence"])
-
-    score_percent = round(confidence * 100, 2)
-
-    st.progress(min(int(score_percent), 100))
-
-    if score_percent >= 85:
-        st.success(f"{score_percent}%")
-    elif score_percent >= 60:
-        st.warning(f"{score_percent}%")
-    else:
-        st.error(f"{score_percent}%")
-
-    # ====================================
-    # RECOGNIZED TEXT
-    # ====================================
+    # OCR TEXT
 
     st.subheader(TEXTS["recognized"])
 
-    st.text_area(
-        "",
-        extracted_text,
-        height=200
-    )
+    st.text_area("", extracted_text, height=200)
 
-    # ====================================
-    # HARMFUL INGREDIENTS
-    # ====================================
+    # RESULTS
 
-    st.subheader(TEXTS["found"])
+    st.subheader(TEXTS["results"])
 
-    if harmful_found:
-        for ingredient in harmful_found:
-            st.warning(f"{TEXTS['warning']} {ingredient}")
+    if results:
+
+        for item in results:
+
+            if item["type"] == "harmful":
+
+                st.error(
+                    f"⚠️ {TEXTS['harmful']}: "
+                    f"{item['name_bg'] if is_bg else item['name_en']}"
+                )
+
+            else:
+
+                st.success(
+                    f"✅ {TEXTS['safe']}: "
+                    f"{item['name_bg'] if is_bg else item['name_en']}"
+                )
+
+            st.write(
+                f"📖 {item['description']}"
+            )
+
+            st.write(
+                f"❤️ {TEXTS['health']}: {item['health']}"
+            )
+
+            st.write(
+                f"🥗 {TEXTS['alternative']}: {item['alternative']}"
+            )
+
+            st.divider()
+
     else:
-        st.success(TEXTS["not_found"])
+        st.info("No ingredients detected.")
 
 # ====================================
-# HISTORY SECTION
+# HISTORY
 # ====================================
-
-st.divider()
 
 st.subheader(TEXTS["history"])
 
@@ -264,27 +304,26 @@ if st.session_state.scan_history:
     csv = history_df.to_csv(index=False).encode("utf-8")
 
     st.download_button(
-        label=TEXTS["download"],
-        data=csv,
-        file_name="scan_history.csv",
-        mime="text/csv"
+        TEXTS["download"],
+        csv,
+        "scan_history.csv",
+        "text/csv"
     )
 
-else:
-    st.info("No scans yet.")
-
 # ====================================
-# SIDEBAR INFO
+# SIDEBAR
 # ====================================
 
 st.sidebar.markdown("## Features")
 
 st.sidebar.markdown("""
-- OCR via EasyOCR
-- Bulgarian + English support
+- OCR Label Scanning
+- Bulgarian + English
 - Harmful ingredient detection
+- Safe ingredient detection
+- Health risk explanations
+- Healthy alternatives
 - Camera support
-- OCR confidence score
 - Scan history
 - CSV export
 """)
